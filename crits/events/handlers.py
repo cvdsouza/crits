@@ -1,3 +1,5 @@
+from bson.objectid import ObjectId
+import datetime
 import json
 import uuid
 
@@ -12,6 +14,7 @@ except ImportError:
 
 from crits.core import form_consts
 from crits.core.class_mapper import class_from_id
+from crits.campaigns.campaign import Campaign
 from crits.campaigns.forms import CampaignForm
 from crits.core.crits_mongoengine import create_embedded_source, json_handler
 from crits.core.crits_mongoengine import EmbeddedCampaign
@@ -85,6 +88,18 @@ def get_event_details(event_id, analyst):
     #relationships
     relationships = event.sort_relationships("%s" % analyst, meta=True)
 
+    # Get count of related Events for each related Indicator
+    for ind in relationships.get('Indicator', []):
+        count = Event.objects(relationships__object_id=ind['id'],
+                              source__name__in=sources).count()
+        ind['rel_ind_events'] = count
+
+    # Get count of related Events for each related Sample
+    for smp in relationships.get('Sample', []):
+        count = Event.objects(relationships__object_id=smp['id'],
+                              source__name__in=sources).count()
+        smp['rel_smp_events'] = count
+
     # relationship
     relationship = {
             'type': 'Event',
@@ -140,11 +155,22 @@ def generate_event_jtable(request, option):
         details_url = mapper['details_url']
         details_url_key = mapper['details_url_key']
         fields = mapper['fields']
+
+        # filter list on relationship to given ObjectId
+        query = {}
+        if 'related' in request.GET:
+            try:
+                oid = ObjectId(request.GET.get('related'))
+                query = {'relationships.value': oid}
+            except:
+                pass
+
         response = jtable_ajax_list(obj_type,
                                     details_url,
                                     details_url_key,
                                     request,
-                                    includes=fields)
+                                    includes=fields,
+                                    query=query)
         return HttpResponse(json.dumps(response,
                                        default=json_handler),
                             content_type="application/json")
@@ -234,7 +260,8 @@ def generate_event_id(event):
     return uuid.uuid4()
 
 def add_new_event(title, description, event_type, source, method, reference,
-                  date, analyst, bucket_list=None, ticket=None, related_id=None, 
+                  date, analyst, bucket_list=None, ticket=None,
+                  campaign=None, campaign_confidence=None, related_id=None,
                   related_type=None, relationship_type=None):
     """
     Add a new Event to CRITs.
@@ -266,8 +293,13 @@ def add_new_event(title, description, event_type, source, method, reference,
     :param relationship_type: Type of relationship to create.
     :type relationship_type: str
     :returns: dict with keys "success" (boolean) and "message" (str)
+    :param campaign: Campaign to associate with this Event
+    :type campaign: str
+    :param campaign_confidence: Confidence to associate with the Campaign
+    :type campaign_confidence: str
     """
 
+    result = dict()
     if not source:
         return {'success': False, 'message': "Missing source information."}
 
@@ -282,6 +314,27 @@ def add_new_event(title, description, event_type, source, method, reference,
                                analyst=analyst,
                                date=date)
     event.add_source(s)
+
+    valid_campaign_confidence = {
+        'low': 'low',
+        'medium': 'medium',
+        'high': 'high'}
+    valid_campaigns = {}
+    for c in Campaign.objects(active='on'):
+        valid_campaigns[c['name'].lower()] = c['name']
+
+    if campaign:
+        if isinstance(campaign, basestring) and len(campaign) > 0:
+            if campaign.lower() not in valid_campaigns:
+                result = {'success':False, 'message':'{} is not a valid campaign.'.format(campaign)}
+            else:
+                confidence = valid_campaign_confidence.get(campaign_confidence, 'low')
+                campaign = EmbeddedCampaign(name=campaign,
+                                                   confidence=confidence,
+                                                   description="",
+                                                   analyst=analyst,
+                                                   date=datetime.datetime.now())
+                event.add_campaign(campaign)
 
     if bucket_list:
         event.add_bucket_list(bucket_list, analyst)
