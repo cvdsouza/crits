@@ -2216,7 +2216,7 @@ class CritsBaseAttributes(CritsDocument, CritsBaseDocument,
             return rel_dict
         elif username:
             user_source_access = user_sources(username)
-            for r in self.relationships:
+            for r in sorted(self.relationships, key=lambda rr: rr['date'], reverse=True):
                 rd = r.to_dict()
                 obj_class = class_from_type(rd['type'])
                 # TODO: these should be limited to the fields above, or at
